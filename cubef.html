@@ -1,0 +1,252 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Cube Field — HTML Canvas Clone</title>
+<style>
+  :root{--bg:#070814;--accent:#66d3ff;--panel:#0f1720;--danger:#ff6b6b;--muted:#9aa6b2}
+  html,body{height:100%;margin:0;background:var(--bg);color:#e6f0ff;font-family:Inter,ui-sans-serif,system-ui,Segoe UI,Roboto,Helvetica,Arial}
+  #wrap{display:flex;flex-direction:column;height:100vh}
+  header{display:flex;align-items:center;justify-content:space-between;padding:12px 18px;background:linear-gradient(180deg,rgba(255,255,255,0.02),transparent);border-bottom:1px solid rgba(255,255,255,0.03)}
+  h1{font-size:16px;margin:0}
+  .meta{display:flex;gap:12px;align-items:center}
+  .pill{background:#081124;padding:8px 10px;border-radius:10px;border:1px solid rgba(255,255,255,0.03);font-weight:700}
+  main{flex:1;display:flex;align-items:center;justify-content:center}
+  canvas{width:100%;height:100%;display:block}
+  footer{padding:10px 14px;background:linear-gradient(180deg,transparent,rgba(255,255,255,0.02));display:flex;gap:8px;align-items:center}
+  button{background:#0b1220;border:1px solid rgba(255,255,255,0.03);color:var(--accent);padding:8px 10px;border-radius:8px;font-weight:700;cursor:pointer}
+  .small{font-size:13px;color:var(--muted)}
+  .center{display:flex;flex-direction:column;align-items:center}
+  #overlay{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none}
+  .card{pointer-events:auto;background:var(--panel);padding:18px;border-radius:14px;border:1px solid rgba(255,255,255,0.03);width:320px;text-align:center}
+  .controls{display:flex;gap:8px;justify-content:center;margin-top:8px}
+  kbd{background:#06101a;border:1px solid rgba(255,255,255,0.03);padding:6px 8px;border-radius:6px;font-weight:700}
+</style>
+</head>
+<body>
+<div id="wrap">
+  <header>
+    <h1>Cube Field — HTML Clone</h1>
+    <div class="meta">
+      <div class="pill">Score: <span id="uiScore">0</span></div>
+      <div class="pill">Best: <span id="uiBest">0</span></div>
+      <div class="pill small">Speed: <span id="uiSpeed">0</span></div>
+    </div>
+  </header>
+  <main>
+    <canvas id="c"></canvas>
+    <div id="overlay"><div class="card" id="card">
+      <h2 id="title">Cube Field</h2>
+      <div id="subtitle" class="small">Avoid the cubes — survive as long as possible</div>
+      <div class="controls">
+        <button id="start">Start</button>
+        <button id="how">How</button>
+      </div>
+      <div style="margin-top:10px" class="small">Move: <kbd>←</kbd> <kbd>→</kbd> or mouse / touch</div>
+    </div></div>
+  </main>
+  <footer>
+    <div class="small">Built with Canvas • Local high score stored</div>
+    <div style="flex:1"></div>
+    <button id="restart">Restart</button>
+  </footer>
+</div>
+
+<script>
+// --- Canvas setup ---
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+function resize(){
+  const dpr = devicePixelRatio || 1;
+  canvas.width = innerWidth * dpr;
+  canvas.height = (innerHeight - document.querySelector('header').offsetHeight - document.querySelector('footer').offsetHeight) * dpr;
+  canvas.style.width = innerWidth + 'px';
+  canvas.style.height = (innerHeight - document.querySelector('header').offsetHeight - document.querySelector('footer').offsetHeight) + 'px';
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+}
+addEventListener('resize', resize); resize();
+
+// --- Game state ---
+let running = false;
+let paused = false;
+let score = 0;
+let best = parseInt(localStorage.getItem('cube_best')||'0',10);
+let speed = 5; // forward speed
+let spawnTimer = 0;
+let spawnInterval = 0.7; // seconds
+let cubes = [];
+let last = performance.now();
+let shipX = 0; // normalized -1..1
+let targetShipX = 0;
+const FOV = 700;
+const lanes = 7; // logical grid width for feel
+
+// UI refs
+const uiScore = document.getElementById('uiScore');
+const uiBest = document.getElementById('uiBest');
+const uiSpeed = document.getElementById('uiSpeed');
+uiBest.textContent = best;
+
+// --- input ---
+addEventListener('mousemove', e=>{
+  const nx = (e.clientX / innerWidth) * 2 - 1; // -1..1
+  targetShipX = nx;
+});
+addEventListener('touchmove', e=>{ e.preventDefault(); const t=e.touches[0]; const nx=(t.clientX/innerWidth)*2-1; targetShipX=nx; }, {passive:false});
+addEventListener('keydown', e=>{
+  if(e.key==='ArrowLeft') targetShipX = clamp(targetShipX - 0.25, -1, 1);
+  if(e.key==='ArrowRight') targetShipX = clamp(targetShipX + 0.25, -1, 1);
+  if(e.key==='p') paused = !paused;
+});
+
+// --- utilities ---
+function clamp(v,a,b){return Math.max(a,Math.min(b,v));}
+function rand(a,b){return Math.random()*(b-a)+a}
+
+// --- cube creation ---
+function spawnCube(){
+  // logical x between -1..1, y fixed just above view, z starting at far distance
+  const laneX = (Math.floor(rand(0,lanes)) / (lanes-1)) * 2 - 1; // -1..1 discrete-ish
+  const x = laneX + rand(-0.15,0.15);
+  const y = rand(-0.2,0.2);
+  const z = rand(800,1500);
+  const size = rand(40,110);
+  cubes.push({x,y,z,size});
+}
+
+// --- projection ---
+function project(x,y,z){
+  const scale = FOV / (FOV + z);
+  const px = (x * 0.5 * innerWidth) * scale + innerWidth/2;
+  const py = (y * 0.5 * (canvas.height / (devicePixelRatio||1))) * scale + (canvas.height/(devicePixelRatio||1))/2;
+  return {x:px,y:py,scale};
+}
+
+// --- game loop ---
+function start(){
+  running = true; paused = false; score = 0; speed = 6; spawnTimer = 0; cubes = []; shipX = 0; targetShipX = 0; uiScore.textContent = '0'; uiSpeed.textContent = speed.toFixed(1);
+  document.getElementById('overlay').style.display = 'none';
+}
+
+function restart(){
+  start();
+}
+
+function gameOver(){
+  running = false;
+  localStorage.setItem('cube_best', Math.max(best, score));
+  best = Math.max(best, score); uiBest.textContent = best;
+  // show overlay with score
+  document.getElementById('overlay').style.display = 'flex';
+  document.getElementById('title').textContent = 'Game Over';
+  document.getElementById('subtitle').textContent = 'Score: ' + score + ' • Best: ' + best;
+}
+
+function update(dt){
+  if(!running || paused) return;
+  // increase difficulty slightly over time
+  speed += dt * 0.6; // accelerate
+  uiSpeed.textContent = speed.toFixed(1);
+
+  // spawn
+  spawnTimer += dt;
+  spawnInterval = clamp(0.6 - Math.log(1+speed)/12, 0.2, 0.9);
+  if(spawnTimer > spawnInterval){ spawnTimer = 0; spawnCube(); }
+
+  // move cubes
+  for(let i=cubes.length-1;i>=0;i--){
+    const c = cubes[i];
+    c.z -= speed * 200 * dt; // translate toward camera
+    // small lateral drift
+    c.x += Math.sin((c.z+1000)/300 + i)*0.0005 * (i%3?1:-1);
+    // remove behind camera
+    if(c.z < -100){ cubes.splice(i,1); score += 1; uiScore.textContent = score; }
+  }
+
+  // ship smoothing
+  shipX = lerp(shipX, targetShipX, clamp(dt*8,0,1));
+
+  // collision
+  const shipScreen = {x: innerWidth/2 + shipX * innerWidth*0.35, y: (canvas.height/(devicePixelRatio||1)) * 0.8};
+  const shipR = 10 + Math.max(0, Math.min(28, (speed-6)*2));
+  for(const c of cubes){
+    const p = project(c.x, c.y, c.z);
+    const hw = c.size * p.scale * 0.5;
+    const hh = c.size * p.scale * 0.5;
+    // simple AABB vs circle check
+    const dx = Math.max(Math.abs(shipScreen.x - p.x) - hw, 0);
+    const dy = Math.max(Math.abs(shipScreen.y - p.y) - hh, 0);
+    if(dx*dx + dy*dy < shipR*shipR){ gameOver(); return; }
+  }
+}
+
+function draw(){
+  // clear
+  ctx.fillStyle = '#070814'; ctx.fillRect(0,0,innerWidth,canvas.height/(devicePixelRatio||1));
+
+  // perspective grid (horizon)
+  const H = canvas.height/(devicePixelRatio||1);
+  ctx.save(); ctx.translate(0,0);
+  for(let i=0;i<10;i++){
+    const z = 200 + i*200;
+    const p1 = project(-2,0,z);
+    const p2 = project(2,0,z);
+    ctx.strokeStyle = 'rgba(255,255,255,0.03)'; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(p1.x,p1.y); ctx.lineTo(p2.x,p2.y); ctx.stroke();
+  }
+  ctx.restore();
+
+  // draw cubes sorted back to front
+  const sorted = cubes.slice().sort((a,b)=>b.z - a.z);
+  for(const c of sorted){
+    if(c.z > 4000) continue; // too far
+    const p = project(c.x,c.y,c.z);
+    const s = c.size * p.scale;
+    const x = p.x - s/2; const y = p.y - s/2;
+    // depth shade
+    const shade = clamp(1 - (c.z/2000), 0.08, 0.95);
+    ctx.fillStyle = `rgba(${Math.floor(40*shade)},${Math.floor(200*shade)},${Math.floor(255*shade)},${clamp(0.2+shade*0.9,0,1)})`;
+    roundRect(ctx,x,y,s,s,4);
+    // edge
+    ctx.strokeStyle = `rgba(0,0,0,${clamp(0.1+ (1-shade)*0.8,0,0.8)})`;
+    ctx.lineWidth = Math.max(1,1*p.scale);
+    ctx.strokeRect(x,y,s,s);
+  }
+
+  // draw ship
+  const shipScreen = {x: innerWidth/2 + shipX * innerWidth*0.35, y: (canvas.height/(devicePixelRatio||1)) * 0.8};
+  ctx.save(); ctx.translate(shipScreen.x, shipScreen.y);
+  ctx.beginPath(); ctx.moveTo(0,-14); ctx.lineTo(10,8); ctx.lineTo(-10,8); ctx.closePath();
+  ctx.fillStyle = 'rgba(255,255,255,0.95)'; ctx.fill();
+  ctx.restore();
+
+  // score top-left
+  ctx.fillStyle = 'rgba(255,255,255,0.9)'; ctx.font = '18px system-ui'; ctx.fillText('Score: ' + score, 14, 26);
+}
+
+function loop(now){
+  const dt = Math.min(0.05, (now - last)/1000); last = now;
+  update(dt); draw();
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+
+// helpers
+function lerp(a,b,t){return a+(b-a)*t}
+function roundRect(ctx,x,y,w,h,r){ctx.beginPath();ctx.moveTo(x+r,y);ctx.arcTo(x+w,y,x+w,y+h,r);ctx.arcTo(x+w,y+h,x,y+h,r);ctx.arcTo(x,y+h,x,y,r);ctx.arcTo(x,y,x+w,y,r);ctx.closePath();ctx.fill();}
+
+// UI buttons
+document.getElementById('start').addEventListener('click', ()=>{ start(); });
+document.getElementById('how').addEventListener('click', ()=>{ alert('Move with mouse/touch or arrow keys. Avoid incoming cubes. Survive as long as possible.'); });
+document.getElementById('restart').addEventListener('click', ()=>{ restart(); });
+
+autoShowIntro();
+
+function autoShowIntro(){ document.getElementById('overlay').style.display = 'flex'; document.getElementById('title').textContent='Cube Field'; document.getElementById('subtitle').textContent='Press Start to play'; }
+
+// update best display periodically
+setInterval(()=>{ uiBest.textContent = best; }, 1000);
+
+</script>
+</body>
+</html>
