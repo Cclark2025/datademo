@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Zombie Game</title>
+  <style>
+    body {
+      margin: 0;
+      background: #111;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+    }
+    canvas {
+      background: #333;
+      border: 2px solid #0f0;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="game" width="600" height="400"></canvas>
+
+  <script>
+    const canvas = document.getElementById('game');
+    const ctx = canvas.getContext('2d');
+
+    const player = {
+      x: 300,
+      y: 200,
+      size: 20,
+      color: 'lime',
+      speed: 3
+    };
+
+    const zombie = {
+      x: 100,
+      y: 100,
+      size: 20,
+      color: 'red',
+      speed: 1.2
+    };
+
+    const bullets = [];
+    const keys = {};
+
+    document.addEventListener('keydown', e => keys[e.key] = true);
+    document.addEventListener('keyup', e => keys[e.key] = false);
+
+    canvas.addEventListener('click', e => {
+      const rect = canvas.getBoundingClientRect();
+      const mouseX = e.clientX - rect.left;
+      const mouseY = e.clientY - rect.top;
+      const angle = Math.atan2(mouseY - player.y, mouseX - player.x);
+
+      bullets.push({
+        x: player.x,
+        y: player.y,
+        dx: Math.cos(angle) * 5,
+        dy: Math.sin(angle) * 5,
+        size: 5
+      });
+    });
+
+    function movePlayer() {
+      if (keys['ArrowUp'] || keys['w']) player.y -= player.speed;
+      if (keys['ArrowDown'] || keys['s']) player.y += player.speed;
+      if (keys['ArrowLeft'] || keys['a']) player.x -= player.speed;
+      if (keys['ArrowRight'] || keys['d']) player.x += player.speed;
+
+      // Keep player in bounds
+      player.x = Math.max(0, Math.min(canvas.width, player.x));
+      player.y = Math.max(0, Math.min(canvas.height, player.y));
+    }
+
+    function moveZombie() {
+      const angle = Math.atan2(player.y - zombie.y, player.x - zombie.x);
+      zombie.x += Math.cos(angle) * zombie.speed;
+      zombie.y += Math.sin(angle) * zombie.speed;
+    }
+
+    function updateBullets() {
+      for (let i = bullets.length - 1; i >= 0; i--) {
+        bullets[i].x += bullets[i].dx;
+        bullets[i].y += bullets[i].dy;
+
+        // Remove if out of bounds
+        if (
+          bullets[i].x < 0 || bullets[i].x > canvas.width ||
+          bullets[i].y < 0 || bullets[i].y > canvas.height
+        ) {
+          bullets.splice(i, 1);
+        } else {
+          // Collision with zombie
+          const dist = Math.hypot(bullets[i].x - zombie.x, bullets[i].y - zombie.y);
+          if (dist < zombie.size) {
+            bullets.splice(i, 1);
+            zombie.x = Math.random() * canvas.width;
+            zombie.y = Math.random() * canvas.height;
+          }
+        }
+      }
+    }
+
+    function drawPlayer() {
+      ctx.fillStyle = player.color;
+      ctx.beginPath();
+      ctx.arc(player.x, player.y, player.size, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    function drawZombie() {
+      ctx.fillStyle = zombie.color;
+      ctx.beginPath();
+      ctx.arc(zombie.x, zombie.y, zombie.size, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    function drawBullets() {
+      ctx.fillStyle = 'yellow';
+      bullets.forEach(b => {
+        ctx.beginPath();
+        ctx.arc(b.x, b.y, b.size, 0, Math.PI * 2);
+        ctx.fill();
+      });
+    }
+
+    function checkGameOver() {
+      const dist = Math.hypot(player.x - zombie.x, player.y - zombie.y);
+      if (dist < player.size + zombie.size) {
+        alert("Game Over! You've been eaten by a zombie!");
+        document.location.reload();
+      }
+    }
+
+    function gameLoop() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      movePlayer();
+      moveZombie();
+      updateBullets();
+      checkGameOver();
+
+      drawPlayer();
+      drawZombie();
+      drawBullets();
+
+      requestAnimationFrame(gameLoop);
+    }
+
+    gameLoop();
+  </script>
+</body>
+</html>
